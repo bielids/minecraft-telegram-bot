@@ -1,0 +1,24 @@
+permissions:
+  op:
+  - makeop
+  - deop
+  - ssh
+  mod:
+  - clone
+  user:
+  - status
+  disabled:
+  - restart
+  - backup
+groups:
+  op:
+  - admin_username_here
+  mod:
+  - mod_username_here
+  user:
+  - user_username_here
+settings:
+  log_level: info
+  fileWatch:
+    caseSensitive: true
+    ignoreDirectories: true
