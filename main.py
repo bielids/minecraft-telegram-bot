@@ -10,6 +10,7 @@ import requests
 import subprocess
 import sched
 import SecureString
+import sys
 from threading import Thread
 from watchdog.events import RegexMatchingEventHandler
 from watchdog.observers import Observer
@@ -163,16 +164,17 @@ my_observer.schedule(fileEventHandler, path, recursive=goRecursively)
 
 # function to check if user is authorized to run cmd
 # sys._getframe().f_code.co_name
-def checkPerm(function, username):
+def checkPerm(update, function, username):
     logging.info('Checking if ' + username + ' can execute ' + function)
     if function in cmdPerms['disabled']:
         logging.info(function + ' has been disabled')
         update.message.reply_text(function + ' is currently disabled.')
         return False
     for group in users:
-        if username in group:
+        if username in users[group]:
             permLevel = group
-    if function in cmdPerms[perm_level]:
+    print('perm level: ' + permLevel)
+    if function in cmdPerms[permLevel]:
         logging.info('User ' + username + ' has correct privileges to execute ' + function + '. Continuing...')
         return True
     else:
@@ -195,13 +197,14 @@ def schedDelUnixUser(ttl):
     s.enter(ttl, 1, delUnixUser)
     s.run()
 
-def sendMinecraftCommand(mcCmd, botArgs):
+def sendMinecraftCommand(update, mcCmd, botArgs):
     botArgs = botArgs.split()
     mcWorld = botArgs[1]
     mcArgs = ' '.join(botArgs[2:])
     bashCommand = "/home/minecraft/scripts/ManageMinecraftBot/sendMinecraftCMD.sh " + mcCmd + " " + mcWorld + " " + mcArgs
     print(bashCommand)
     result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
+    update.message.reply_text(result.stdout.decode("utf-8"))
 
 def sendCreateUser(update):
     update.message.reply_text('Please create a Telegram username before continuing')
@@ -226,7 +229,7 @@ def restart_command(update: Update, context: CallbackContext) -> None:
     except TypeError:
         sendCreateUser(update)
         return
-    if checkPerm(sys._getframe().f_code.co_name.split('_')[0], update.message.from_user.username):
+    if checkPerm(update, sys._getframe().f_code.co_name.split('_')[0], update.message.from_user.username):
         bashCommand = "sudo systemctl restart minecraft@JarlsWorld"
         result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
         update.message.reply_text('Minecraft server rebooted')
@@ -238,7 +241,7 @@ def backup_command(update: Update, context: CallbackContext) -> None:
         sendCreateUser(update)
         return
     perm_level = 'disabled'
-    if checkPerm(perm_level, update.message.from_user.username):
+    if checkPerm(update, sys._getframe().f_code.co_name.split('_')[0], update.message.from_user.username):
         try:
             os.remove('/home/minecraft/tmp/JarlsWorld_' + DATE + '.tar.gz')
         except FileNotFoundError:
@@ -290,12 +293,12 @@ def genSSH_command(update: Update, context: CallbackContext) -> None:
 def op_command(update: Update, context: CallbackContext) -> None:
     perm_level = 'op'
     try:
-        logging.info(update.message.from_user.username + ' requested permission info')
+        logging.info(update.message.from_user.username + ' made someone OP')
     except TypeError:
         sendCreateUser(update)
         return
-    if checkPerm(perm_level, update.message.from_user.username):
-        sendMinecraftCommand('op', update.message.text)
+    if checkPerm(update, sys._getframe().f_code.co_name.split('_')[0], update.message.from_user.username):
+        sendMinecraftCommand(update, 'op', update.message.text)
 
 def deop_command(update: Update, context: CallbackContext) -> None:
     perm_level = 'op'
@@ -304,8 +307,8 @@ def deop_command(update: Update, context: CallbackContext) -> None:
     except TypeError:
         sendCreateUser(update)
         return
-    if checkPerm(perm_level, update.message.from_user.username):
-        sendMinecraftCommand('deop', update.message.text)
+    if checkPerm(update, sys._getframe().f_code.co_name.split('_')[0], update.message.from_user.username):
+        sendMinecraftCommand(update, 'deop', update.message.text)
 
 def test_command(update: Update, context: CallbackContext) -> None:
     try:
@@ -330,8 +333,8 @@ def broadcast_command(update: Update, context: CallbackContext) -> None:
     except TypeError:
         sendCreateUser(update)
         return
-    if checkPerm(perm_level, update.message.from_user.username):
-        sendMinecraftCommand('broadcast', update.message.text)
+    if checkPerm(update, sys._getframe().f_code.co_name.split('_')[0], update.message.from_user.username):
+        sendMinecraftCommand(update, 'broadcast', update.message.text)
 
 
 def echo(update: Update, context: CallbackContext) -> None:
