@@ -147,24 +147,18 @@ def badConfigBackup():
 loadConfig()
 loadConfigValues()
 
-# event handler settings, will move to yaml
+# event handler settings
 regexMatch = [".+yml"]
 ignore_patterns = [".+bak|.+badValues|.+swp"]
 fileEventHandler = RegexMatchingEventHandler(regexMatch, ignore_patterns, ignoreDirectories, caseSensitive)
-
-# more file handling
-#fileEventHandler.on_created = watchFile.on_created
-#fileEventHandler.on_deleted = watchFile.on_deleted
 fileEventHandler.on_modified = watchFile.on_modified
-#fileEventHandler.on_moved = watchFile.on_moved
-#path = "."
 goRecursively = False
 my_observer = Observer()
 my_observer.schedule(fileEventHandler, path, recursive=goRecursively)
 
 # function to check if user is authorized to run cmd
-# sys._getframe().f_code.co_name
-def checkPerm(update, function, username):
+def checkPerm(update, function):
+    username = update.message.from_user.username
     logging.info('Checking if ' + username + ' can execute ' + function)
     if function in cmdPerms['disabled']:
         logging.info(function + ' has been disabled')
@@ -173,12 +167,20 @@ def checkPerm(update, function, username):
     for group in users:
         if username in users[group]:
             permLevel = group
-    print('perm level: ' + permLevel)
     if function in cmdPerms[permLevel]:
         logging.info('User ' + username + ' has correct privileges to execute ' + function + '. Continuing...')
         return True
     else:
         logging.info('Could not find user....')
+        return False
+
+# function to log cmd usage
+def functionLogging(update, message):
+    try:
+        logging.info(update.message.from_user.username + ' ' + message)
+        return True
+    except TypeError:
+        sendCreateUser(update)
         return False
 
 # decide on what username/password to create
@@ -216,31 +218,23 @@ def delUnixUser(unixUsername):
 
 ##################################################################################
 # Define a few command handlers. These usually take the two arguments update and #
+# context. Error handlers also receive the raised TelegramError object in error. #
 ##################################################################################
 
-# context. Error handlers also receive the raised TelegramError object in error.
 def start(update: Update, context: CallbackContext) -> None:
     """Send a message when the command /start is issued."""
     update.message.reply_text('Hi!')
 
 def restart_command(update: Update, context: CallbackContext) -> None:
-    try:
-        logging.info(update.message.from_user.username + ' requested permission info')
-    except TypeError:
-        sendCreateUser(update)
-        return
-    if checkPerm(update, sys._getframe().f_code.co_name.split('_')[0], update.message.from_user.username):
+    loggingMessage = 'requested to restart the server'
+    if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
         bashCommand = "sudo systemctl restart minecraft@JarlsWorld"
         result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
         update.message.reply_text('Minecraft server rebooted')
 
 def backup_command(update: Update, context: CallbackContext) -> None:
-    try:
-        logging.info(update.message.from_user.username + ' requested backup of server')
-    except TypeError:
-        sendCreateUser(update)
-        return
-    if checkPerm(update, sys._getframe().f_code.co_name.split('_')[0], update.message.from_user.username):
+    loggingMessage = 'requested to backup the server'
+    if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
         try:
             os.remove('/home/minecraft/tmp/JarlsWorld_' + DATE + '.tar.gz')
         except FileNotFoundError:
@@ -254,8 +248,7 @@ def backup_command(update: Update, context: CallbackContext) -> None:
         update.message.reply_text(plikout[1])
 
 def help_command(update: Update, context: CallbackContext) -> None:
-    """Send a message when the command /help is issued."""
-    update.message.reply_text('Help!')
+    update.message.reply_text('You are on your own buddy.')
 
 def perm_command(update: Update, context: CallbackContext) -> None:
     try:
@@ -290,46 +283,36 @@ def genSSH_command(update: Update, context: CallbackContext) -> None:
     schedDelUnixUser(7200)
 
 def op_command(update: Update, context: CallbackContext) -> None:
-    try:
-        logging.info(update.message.from_user.username + ' made someone OP')
-    except TypeError:
-        sendCreateUser(update)
-        return
-    if checkPerm(update, sys._getframe().f_code.co_name.split('_')[0], update.message.from_user.username):
+    loggingMessage = 'requested to grant OP privs to ' + update.message.text[2:]
+    if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
         sendMinecraftCommand(update, 'op', update.message.text)
 
 def deop_command(update: Update, context: CallbackContext) -> None:
-    try:
-        logging.info(update.message.from_user.username + ' requested permission info')
-    except TypeError:
-        sendCreateUser(update)
-        return
-    if checkPerm(update, sys._getframe().f_code.co_name.split('_')[0], update.message.from_user.username):
+    loggingMessage = 'requested to revoke OP privs for ' + update.message.text[2:]
+    if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
         sendMinecraftCommand(update, 'deop', update.message.text)
 
 def test_command(update: Update, context: CallbackContext) -> None:
-    try:
-        logging.info(update.message.from_user.username + ' requested permission info')
-    except TypeError:
-        sendCreateUser(update)
-        return
+    loggingMessage = 'requested server performance information'
+    if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
+        pass
 
 def hwinfo_command(update: Update, context: CallbackContext) -> None:
-    pass
+    loggingMessage = 'requested server performance information'
+    if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
+        pass
 
 def clone_command(update: Update, context: CallbackContext) -> None:
-    pass
+    loggingMessage = 'requested to clone worlds'
+    if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
+        pass
 
 def list_command(update: Update, context: CallbackContext) -> None:
     pass
 
 def broadcast_command(update: Update, context: CallbackContext) -> None:
-    try:
-        logging.info(update.message.from_user.username + ' broadcasted')
-    except TypeError:
-        sendCreateUser(update)
-        return
-    if checkPerm(update, sys._getframe().f_code.co_name.split('_')[0], update.message.from_user.username):
+    loggingMessage = 'requested to broadcast to the server'
+    if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
         sendMinecraftCommand(update, 'broadcast', update.message.text)
 
 
