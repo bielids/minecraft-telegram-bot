@@ -341,6 +341,8 @@ def echo(update: Update, context: CallbackContext) -> None:
     """Echo the user message."""
     update.message.reply_text(update.message.text)
 
+def badCMD(update: Update, context: CallbackContext) -> None:
+    update.message.reply_text('Invalid command')
 
 def main():
     # Start the file watch service
@@ -371,7 +373,7 @@ def main():
     dispatcher.add_handler(CommandHandler("test", test_command))
 
     # on noncommand i.e message - echo the message on Telegram
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, echo))
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, badCMD))
 
     # Start the Bot
     updater.start_polling()
