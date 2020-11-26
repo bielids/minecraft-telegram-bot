@@ -240,7 +240,6 @@ def backup_command(update: Update, context: CallbackContext) -> None:
     except TypeError:
         sendCreateUser(update)
         return
-    perm_level = 'disabled'
     if checkPerm(update, sys._getframe().f_code.co_name.split('_')[0], update.message.from_user.username):
         try:
             os.remove('/home/minecraft/tmp/JarlsWorld_' + DATE + '.tar.gz')
@@ -291,7 +290,6 @@ def genSSH_command(update: Update, context: CallbackContext) -> None:
     schedDelUnixUser(7200)
 
 def op_command(update: Update, context: CallbackContext) -> None:
-    perm_level = 'op'
     try:
         logging.info(update.message.from_user.username + ' made someone OP')
     except TypeError:
@@ -301,7 +299,6 @@ def op_command(update: Update, context: CallbackContext) -> None:
         sendMinecraftCommand(update, 'op', update.message.text)
 
 def deop_command(update: Update, context: CallbackContext) -> None:
-    perm_level = 'op'
     try:
         logging.info(update.message.from_user.username + ' requested permission info')
     except TypeError:
@@ -327,7 +324,6 @@ def list_command(update: Update, context: CallbackContext) -> None:
     pass
 
 def broadcast_command(update: Update, context: CallbackContext) -> None:
-    perm_level = 'op'
     try:
         logging.info(update.message.from_user.username + ' broadcasted')
     except TypeError:
