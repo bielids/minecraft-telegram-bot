@@ -11,6 +11,7 @@ import subprocess
 import sched
 import SecureString
 import sys
+from mcstatus import MinecraftServer
 from threading import Thread
 from watchdog.events import RegexMatchingEventHandler
 from watchdog.observers import Observer
@@ -183,6 +184,26 @@ def functionLogging(update, message):
         sendCreateUser(update)
         return False
 
+def mcServerQuery(update):
+    global mcPort
+    global mcQueryResult
+    try:
+        mcWorld = update.message.text.split(' ')[1]
+    except:
+        update.message.reply_text('Something went wrong. Did you provide me with a server name?')
+        return False
+    try:
+        with open('/home/minecraft/' + mcWorld + '/server.properties') as conf:
+            for line in conf.readlines():
+                if 'server-port' in line:
+                    mcPort = int(line.split('=')[1])
+    except:
+        update.message.reply_text('Something went wrong. Did you give me a valid name (case-sensitive)?')
+        return False
+    server = MinecraftServer("127.0.0.1", mcPort)
+    mcQueryResult = server.query()
+    return True
+
 # decide on what username/password to create
 def sshUserGen():
     global genUnixUsername
@@ -204,7 +225,7 @@ def sendMinecraftCommand(update, mcCmd, botArgs):
     mcWorld = botArgs[1]
     mcArgs = ' '.join(botArgs[2:])
     bashCommand = "/home/minecraft/scripts/ManageMinecraftBot/sendMinecraftCMD.sh " + mcCmd + " " + mcWorld + " " + mcArgs
-    print(bashCommand)
+    logging.info(bashCommand)
     result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
     update.message.reply_text(result.stdout.decode("utf-8"))
 
@@ -240,7 +261,7 @@ def backup_command(update: Update, context: CallbackContext) -> None:
         except FileNotFoundError:
             logging.info('no file to remove, continuining')
         archiveName = "/home/minecraft/tmp/JarlsWorld_" + DATE + ".tag.gz"
-        bashCommand = "tar -czf " + archiveName + " ~/JarlsWorld"
+        bashCommand = "tar -czf " + archiveName + " /home/minecraft/JarlsWorld"
         result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
         bashCommand = "/home/minecraft/scripts/plik -t 2d " + archiveName
         result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
@@ -283,12 +304,12 @@ def genSSH_command(update: Update, context: CallbackContext) -> None:
     schedDelUnixUser(7200)
 
 def op_command(update: Update, context: CallbackContext) -> None:
-    loggingMessage = 'requested to grant OP privs to ' + update.message.text[2:]
+    loggingMessage = 'requested to grant OP privs to ' + '\n'.join(str(user) for user in update.message.text.split(' ')[2:])
     if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
         sendMinecraftCommand(update, 'op', update.message.text)
 
 def deop_command(update: Update, context: CallbackContext) -> None:
-    loggingMessage = 'requested to revoke OP privs for ' + update.message.text[2:]
+    loggingMessage = 'requested to revoke OP privs for ' + '\n'.join(str(user) for user in update.message.text.split(' ')[2:])
     if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
         sendMinecraftCommand(update, 'deop', update.message.text)
 
@@ -315,6 +336,26 @@ def broadcast_command(update: Update, context: CallbackContext) -> None:
     if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
         sendMinecraftCommand(update, 'broadcast', update.message.text)
 
+def players_command(update: Update, context: CallbackContext) -> None:
+    loggingMessage = 'requested Minecraft player info'
+    if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
+        global mcQueryResult
+        if mcServerQuery(update):
+            update.message.reply_text("The server has the following players online:\n\n{0}".format("\n".join(mcQueryResult.players.names)))
+
+def status_command(update: Update, context: CallbackContext) -> None:
+    loggingMessage = 'requested Minecraft server info'
+    if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
+        global mcQueryResult
+        if mcServerQuery(update):
+            mcPlayersOnline = str(mcQueryResult.players.online)
+            mcPlayersMax = str(mcQueryResult.players.max)
+            mcVersion = mcQueryResult.software.version
+            mcBrand = mcQueryResult.software.brand
+            mcMotd = mcQueryResult.motd
+            mcPlugins = '\n    '.join(mcQueryResult.software.plugins)
+            mcWorld = update.message.text.split(' ')[1]
+            update.message.reply_text("Server info:\n\nServer name: " + mcWorld + "\nMOTD: " + mcMotd + "\nVersion: " + mcVersion + "\nBrand: " + mcBrand + "\nPlayers online: " + mcPlayersOnline + "/" + mcPlayersMax + "\n\nPlugins:\n\n    " + mcPlugins)
 
 def echo(update: Update, context: CallbackContext) -> None:
     """Echo the user message."""
@@ -350,6 +391,8 @@ def main():
     dispatcher.add_handler(CommandHandler("hwinfo", hwinfo_command))
     dispatcher.add_handler(CommandHandler("broadcast", broadcast_command))
     dispatcher.add_handler(CommandHandler("test", test_command))
+    dispatcher.add_handler(CommandHandler("players", players_command))
+    dispatcher.add_handler(CommandHandler("status", status_command))
 
     # on noncommand i.e message - echo the message on Telegram
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, badCMD))

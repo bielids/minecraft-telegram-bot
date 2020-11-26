@@ -11,5 +11,5 @@ if [[ ${#} -gt 2 ]]; then
     sendMinecraftCommand
     echo "Command probably worked"
 else
-    echo "Error: missing arguments"
+    echo -e "Error: missing arguments.\n\nUsage: /command ServerName arguments go here"
 fi

@@ -1,0 +1,8 @@
+2020-11-26 14:37:17,582 [INFO] Scheduler started
+2020-11-26 14:37:28,447 [INFO] andrewtetreault requested to grant OP privs to p Jarlsworld Honk4Stonks
+2020-11-26 14:37:28,448 [INFO] Checking if andrewtetreault can execute op
+2020-11-26 14:37:28,448 [INFO] User andrewtetreault has correct privileges to execute op. Continuing...
+2020-11-26 14:37:28,448 [INFO] /home/minecraft/scripts/ManageMinecraftBot/sendMinecraftCMD.sh op Jarlsworld Honk4Stonks
+2020-11-26 14:37:44,537 [INFO] Received signal 2 (SIGINT), stopping...
+2020-11-26 14:37:44,537 [INFO] Scheduler has been shut down
+2020-11-26 14:37:45,539 [WARNING] Exiting immediately!
