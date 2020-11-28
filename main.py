@@ -11,13 +11,14 @@ import subprocess
 import sched
 import SecureString
 import sys
+import re
 from mcstatus import MinecraftServer
 from threading import Thread
 from watchdog.events import RegexMatchingEventHandler
 from watchdog.observers import Observer
 from datetime import datetime
-from telegram import Update, InputMediaPhoto, InputFile
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler
 
 # Setting variables
 TOKEN = 'TOKEN_GOES_HERE'
@@ -46,7 +47,10 @@ class colour:
    UNDERLINE = '\033[4m'
    END = '\033[0m'
 
-### logging
+##################################################################################
+#                                     Logging                                    #
+##################################################################################
+
 # set logging options
 logging.basicConfig(
     level=logging.INFO,
@@ -63,23 +67,9 @@ if not os.path.exists('logs'):
 	logging.info('Creating log directory.')
 	os.makedirs(path + '/' + 'logs', mode=0o755)
 
-
-# Define file watcher settings for YAML
-class watchFile:
-        def on_created(event):
-                pass
-        def on_deleted(event):
-                pass
-        def on_modified(event):
-                if debug:
-                        logging.info(f"{event.src_path} has been modified, reloading")
-                loadConfig()
-                loadConfigValues()
-                if debug:
-                        logging.info(colour.GREEN + "Reload complete." + colour.END)
-                pass
-        def on_moved(event):
-                pass
+##################################################################################
+#                             Config Management                                  #
+##################################################################################
 
 ### Load config file
 def loadConfig():
@@ -101,6 +91,7 @@ def loadConfig():
                 badConfigBackup()
         except yaml.scanner.ScannerError:
                 badConfigBackup()
+        loadConfigValues()
 
 ### Load variables from YAML config file
 def loadConfigValues():
@@ -144,9 +135,26 @@ def badConfigBackup():
                         pass
                 pass
 
-# load config & values
-loadConfig()
-loadConfigValues()
+##################################################################################
+#                                   File-watch                                   #
+##################################################################################
+
+# Define file watcher settings for YAML
+class watchFile:
+        def on_created(event):
+                pass
+        def on_deleted(event):
+                pass
+        def on_modified(event):
+                if debug:
+                        logging.info(f"{event.src_path} has been modified, reloading")
+                loadConfig()
+                loadConfigValues()
+                if debug:
+                        logging.info(colour.GREEN + "Reload complete." + colour.END)
+                pass
+        def on_moved(event):
+                pass
 
 # event handler settings
 regexMatch = [".+yml"]
@@ -156,6 +164,11 @@ fileEventHandler.on_modified = watchFile.on_modified
 goRecursively = False
 my_observer = Observer()
 my_observer.schedule(fileEventHandler, path, recursive=goRecursively)
+
+
+##################################################################################
+#               Supporting functions used by command handlers                    #
+##################################################################################
 
 # function to check if user is authorized to run cmd
 def checkPerm(update, function):
@@ -184,16 +197,37 @@ def functionLogging(update, message):
         sendCreateUser(update)
         return False
 
+# stores active Minecraft servers to mcServers
+def activeServers():
+    global mcServers
+    mcServers = []
+    bashCommand = "systemctl"
+    result = subprocess.run(bashCommand, stdout=subprocess.PIPE)
+    grepVal = 'minecraft'
+    for process in result.stdout.decode("utf-8").split('\n'):
+        if 'minecraft@' in process:
+            mcServers.append(process.split('.')[0].split('@')[1])
+
+def mcServerSelection(update):
+    global mcServer
+    global mcServers
+    global mcServerSelected
+    try:
+        if update.message.text.split(' ')[1] in mcServers:
+            mcServer = update.message.text.split(' ')[1]
+    except:
+        try:
+            mcServer = mcServerSelected
+        except:
+            print('well poop')
+
 def mcServerQuery(update):
     global mcPort
     global mcQueryResult
+    global mcServerSelected
+    global mcServer
     try:
-        mcWorld = update.message.text.split(' ')[1]
-    except:
-        update.message.reply_text('Something went wrong. Did you provide me with a server name?')
-        return False
-    try:
-        with open('/home/minecraft/' + mcWorld + '/server.properties') as conf:
+        with open('/home/minecraft/' + mcServer + '/server.properties') as conf:
             for line in conf.readlines():
                 if 'server-port' in line:
                     mcPort = int(line.split('=')[1])
@@ -208,8 +242,8 @@ def mcServerQuery(update):
 def sshUserGen():
     global genUnixUsername
     global genUnixPassword
-    genUnixUsername = 'testlogin'
-    genUnixPassword = 'testpassword'
+    genUnixUsername = 'testlogin' # I will need to write the code to have this be randomly generated instead (user & pass)
+    genUnixPassword = 'testpassword' # something like user:password = af4yt2k353:fc230g1cvg (10 char alpha-numerical)
 
 # create the UNIX user used for SSH login
 def createUnixUser(unixUsername, unixPassword):
@@ -222,9 +256,9 @@ def schedDelUnixUser(ttl):
 
 def sendMinecraftCommand(update, mcCmd, botArgs):
     botArgs = botArgs.split()
-    mcWorld = botArgs[1]
+    mcServer = botArgs[1]
     mcArgs = ' '.join(botArgs[2:])
-    bashCommand = "/home/minecraft/scripts/ManageMinecraftBot/sendMinecraftCMD.sh " + mcCmd + " " + mcWorld + " " + mcArgs
+    bashCommand = "/home/minecraft/scripts/ManageMinecraftBot/sendMinecraftCMD.sh " + mcCmd + " " + mcServer + " " + mcArgs
     logging.info(bashCommand)
     result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
     update.message.reply_text(result.stdout.decode("utf-8"))
@@ -236,6 +270,41 @@ def sendCreateUser(update):
 def delUnixUser(unixUsername):
     bashCommand = "sudo -u minecraft_bot userdel " + sshUsernameGen
     result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
+
+##################################################################################
+#                         Graphical interface building                           #
+##################################################################################
+
+def serverKb(update, context):
+    global mcServers
+    activeServers()
+    button_list = []
+    for server in mcServers:
+        button_list.append(InlineKeyboardButton(server, callback_data = server))
+    reply_markup=InlineKeyboardMarkup(build_menu(button_list,n_cols=1))
+
+    update.message.reply_text('Please choose server:', reply_markup=reply_markup)
+
+def build_menu(buttons,n_cols,header_buttons=None,footer_buttons=None):
+  menu = [buttons[i:i + n_cols] for i in range(0, len(buttons), n_cols)]
+  if header_buttons:
+    menu.insert(0, header_buttons)
+  if footer_buttons:
+    menu.append(footer_buttons)
+  return menu
+
+def button(update: Update, context: CallbackContext) -> None:
+    global mcServerSelected
+    query = update.callback_query
+
+    # CallbackQueries need to be answered, even if no notification to the user is needed
+    # Some clients may have trouble otherwise. See https://core.telegram.org/bots/api#callbackquery
+    query.answer()
+
+    mcServerSelected = query.data
+    print(mcServerSelected)
+
+    query.edit_message_text(text=f"Selected option: {query.data}")
 
 ##################################################################################
 # Define a few command handlers. These usually take the two arguments update and #
@@ -257,16 +326,17 @@ def backup_command(update: Update, context: CallbackContext) -> None:
     loggingMessage = 'requested to backup the server'
     if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
         try:
-            os.remove('/home/minecraft/tmp/JarlsWorld_' + DATE + '.tar.gz')
+            os.remove('/home/minecraft/tmp/JarlsServer_' + DATE + '.tar.gz')
         except FileNotFoundError:
             logging.info('no file to remove, continuining')
-        archiveName = "/home/minecraft/tmp/JarlsWorld_" + DATE + ".tag.gz"
-        bashCommand = "tar -czf " + archiveName + " /home/minecraft/JarlsWorld"
+        archiveName = "/home/minecraft/tmp/JarlsServer_" + DATE + ".tag.gz"
+        bashCommand = "tar -czf " + archiveName + " /home/minecraft/JarlsServer"
         result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
         bashCommand = "/home/minecraft/scripts/plik -t 2d " + archiveName
         result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
         plikout = result.stdout.decode("utf-8").split('\n')
         update.message.reply_text(plikout[1])
+        logging.info('Upload completed and sent to user.') # need to verify stdout of plik and tar
 
 def help_command(update: Update, context: CallbackContext) -> None:
     update.message.reply_text('You are on your own buddy.')
@@ -323,6 +393,33 @@ def hwinfo_command(update: Update, context: CallbackContext) -> None:
     if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
         pass
 
+def propUpdate_command(update: Update, context: CallbackContext) -> None:
+    loggingMessage = 'requested to update a setting in server.properties'
+    if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
+        bashCommand = "sed -i 's/" + propSetting + "=.*/" + propSetting + "=" + propVal + "/g' /home/minecraft/" + mcWorld + "/server.properties"
+        result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
+        update.message.reply_text('Setting updated for ' + mcWorld + ". Please restart server to apply changes")
+
+def propGet_command(update: Update, context: CallbackContext) -> None: # grep for single prop, but read whole file and send via TG if no prop specified
+    propList = {}
+    loggingMessage = 'requestet to get a prop in server.properties'
+    if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
+        with open('/home/minecraft/JarlsServer/server.properties') as conf:
+            for prop in conf.readlines():
+                if not prop.startswith('#'):
+                    for propVals in prop.rstrip("\n").split('='):
+                        propList[propVals[0]] = propVals[1]
+                        print(propList)
+        print(propList[0])
+        print('hello world')
+        print(propList[14])
+        update.message.reply_text('\n'.join(propList))
+
+#        bashCommand = "grep " + propSetting + " /home/minecraft/" + mcWorld + "/server.properties"
+ #       result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
+  #      update.message.reply_text('Setting updated for ' + mcWorld + ". Please restart server to apply changes")
+
+
 def clone_command(update: Update, context: CallbackContext) -> None:
     loggingMessage = 'requested to clone worlds'
     if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
@@ -344,9 +441,11 @@ def players_command(update: Update, context: CallbackContext) -> None:
             update.message.reply_text("The server has the following players online:\n\n{0}".format("\n".join(mcQueryResult.players.names)))
 
 def status_command(update: Update, context: CallbackContext) -> None:
+    global mcQueryResult
+    global mcServer
+    serverKb(update, context)
     loggingMessage = 'requested Minecraft server info'
     if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
-        global mcQueryResult
         if mcServerQuery(update):
             mcPlayersOnline = str(mcQueryResult.players.online)
             mcPlayersMax = str(mcQueryResult.players.max)
@@ -354,8 +453,9 @@ def status_command(update: Update, context: CallbackContext) -> None:
             mcBrand = mcQueryResult.software.brand
             mcMotd = mcQueryResult.motd
             mcPlugins = '\n    '.join(mcQueryResult.software.plugins)
-            mcWorld = update.message.text.split(' ')[1]
-            update.message.reply_text("Server info:\n\nServer name: " + mcWorld + "\nMOTD: " + mcMotd + "\nVersion: " + mcVersion + "\nBrand: " + mcBrand + "\nPlayers online: " + mcPlayersOnline + "/" + mcPlayersMax + "\n\nPlugins:\n\n    " + mcPlugins)
+            update.message.reply_text("Server info:\n\nServer name: " + mcServer + "\nMOTD: " + mcMotd + "\nVersion: " + mcVersion + "\nBrand: " + mcBrand + "\nPlayers online: " + mcPlayersOnline + "/" + mcPlayersMax + "\n\nPlugins:\n\n    " + mcPlugins)
+            mcServerSelected = ''
+            mcServer = ''
 
 def echo(update: Update, context: CallbackContext) -> None:
     """Echo the user message."""
@@ -365,6 +465,9 @@ def badCMD(update: Update, context: CallbackContext) -> None:
     update.message.reply_text('Invalid command')
 
 def main():
+    # load config and values
+    loadConfig()
+
     # Start the file watch service
     my_observer.start()
 
@@ -392,7 +495,10 @@ def main():
     dispatcher.add_handler(CommandHandler("broadcast", broadcast_command))
     dispatcher.add_handler(CommandHandler("test", test_command))
     dispatcher.add_handler(CommandHandler("players", players_command))
-    dispatcher.add_handler(CommandHandler("status", status_command))
+    dispatcher.add_handler(CommandHandler("propGet", propGet_command))
+#    dispatcher.add_handler(CommandHandler("kb", kb))
+    updater.dispatcher.add_handler(CallbackQueryHandler(button))
+
 
     # on noncommand i.e message - echo the message on Telegram
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, badCMD))
