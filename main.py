@@ -12,6 +12,10 @@ import sched
 import SecureString
 import sys
 import re
+import string
+import random
+import crypt
+from collections import deque
 from mcstatus import MinecraftServer
 from threading import Thread
 from watchdog.events import RegexMatchingEventHandler
@@ -33,6 +37,7 @@ path = os.path.dirname(os.path.realpath(__file__))
 logDir = "logs"
 logName = "debug.log"
 debug = True
+unixUsers = {}
 
 # styling codes
 class colour:
@@ -149,7 +154,6 @@ class watchFile:
                 if debug:
                         logging.info(f"{event.src_path} has been modified, reloading")
                 loadConfig()
-                loadConfigValues()
                 if debug:
                         logging.info(colour.GREEN + "Reload complete." + colour.END)
                 pass
@@ -159,11 +163,7 @@ class watchFile:
 # event handler settings
 regexMatch = [".+yml"]
 ignore_patterns = [".+bak|.+badValues|.+swp"]
-fileEventHandler = RegexMatchingEventHandler(regexMatch, ignore_patterns, ignoreDirectories, caseSensitive)
-fileEventHandler.on_modified = watchFile.on_modified
 goRecursively = False
-my_observer = Observer()
-my_observer.schedule(fileEventHandler, path, recursive=goRecursively)
 
 
 ##################################################################################
@@ -226,6 +226,7 @@ def mcServerQuery(update):
     global mcQueryResult
     global mcServerSelected
     global mcServer
+    print(mcServer)
     try:
         with open('/home/minecraft/' + mcServer + '/server.properties') as conf:
             for line in conf.readlines():
@@ -238,21 +239,60 @@ def mcServerQuery(update):
     mcQueryResult = server.query()
     return True
 
+def sendCreateUser(update):
+    update.message.reply_text('Please create a Telegram username before continuing')
+    logging.warning('Unknown user requested a command')
+
+##################################################################################
+#                              UNIX user management                              #
+##################################################################################
+
 # decide on what username/password to create
 def sshUserGen():
     global genUnixUsername
     global genUnixPassword
-    genUnixUsername = 'testlogin' # I will need to write the code to have this be randomly generated instead (user & pass)
-    genUnixPassword = 'testpassword' # something like user:password = af4yt2k353:fc230g1cvg (10 char alpha-numerical)
+    genUnixUsername = ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(10))
+    genUnixPassword = ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(10))
 
 # create the UNIX user used for SSH login
 def createUnixUser(unixUsername, unixPassword):
-    bashCommand = "sudo -u minecraft_bot useradd " + unixUsername
+    bashCommand = "sudo useradd -s /bin/bash -r " + unixUsername + " -p " + crypt.crypt(unixPassword)
+    result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
+    bashCommand = "sudo usermod -d /home/minecraft " + unixUsername
+    result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
+    bashCommand = "sudo usermod -aG minecraft_mgmt " + unixUsername
     result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
 
+# schedule user deactivation
 def schedDelUnixUser(ttl):
     s.enter(ttl, 1, delUnixUser)
     s.run()
+
+# actually deactivate the user
+def delUnixUser():
+    global genUnixUsername
+    bashCommand = "sudo pkill -u " + genUnixUsername
+    result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
+    bashCommand = "sudo usermod --lock --shell /bin/nologin " + genUnixUsername
+    result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
+    logging.warning('user deleted!')
+    SecureString.clearmem(genUnixUsername)
+
+def extendUserLifetime(ttl):
+    pass
+
+def matchUnixWithMC(mcUser, unixUser):
+    global unixUsers
+    if mcUser in unixUsers:
+        unixUsers[mcUser].append(unixUser)
+    else:
+        unixUsers[mcUser] = []
+        unixUsers[mcUser].append(unixUser)
+    print(unixUsers)
+
+##################################################################################
+#                         Graphical interface building                           #
+##################################################################################
 
 def sendMinecraftCommand(update, mcCmd, botArgs):
     botArgs = botArgs.split()
@@ -262,18 +302,10 @@ def sendMinecraftCommand(update, mcCmd, botArgs):
     logging.info(bashCommand)
     result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
     update.message.reply_text(result.stdout.decode("utf-8"))
-
-def sendCreateUser(update):
-    update.message.reply_text('Please create a Telegram username before continuing')
-    logging.warning('Unknown user requested a command')
-
-def delUnixUser(unixUsername):
-    bashCommand = "sudo -u minecraft_bot userdel " + sshUsernameGen
-    result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
-
-##################################################################################
-#                         Graphical interface building                           #
-##################################################################################
+    with open("/home/minecraft/" + mcServer + "/mcOut.log") as mcOut:
+        time.sleep(0.5)
+        mcStdout = deque(mcOut, 25)
+    return mcStdout
 
 def serverKb(update, context):
     global mcServers
@@ -303,7 +335,7 @@ def button(update: Update, context: CallbackContext) -> None:
 
     mcServerSelected = query.data
     print(mcServerSelected)
-
+    mcServerSelection(update)
     query.edit_message_text(text=f"Selected option: {query.data}")
 
 ##################################################################################
@@ -366,12 +398,18 @@ def genSSH_command(update: Update, context: CallbackContext) -> None:
     global genUnixPassword
     sshUserGen()
     createUnixUser(genUnixUsername, genUnixPassword)
+    logging.warning('Created new SSH login for ' + update.message.from_user.username + "!")
+    logging.warning('Username: ' + genUnixUsername)
+    matchUnixWithMC(update.message.from_user.username, genUnixUsername)
     update.message.reply_text('New SSH login successfully created!\n\nServer: mc.atetreault.xyz\nPort: 10069')
     update.message.reply_text('Username: ' + genUnixUsername + '\nPassword: ' + genUnixPassword)
     update.message.reply_text('This user will be deactivated in 2 hours!')
-    SecureString.clearmem(genUnixUsername)
     SecureString.clearmem(genUnixPassword)
-    schedDelUnixUser(7200)
+    schedDeletion = Thread(target=schedDelUnixUser, args=(7200,))
+    schedDeletion.start()
+
+def printFish():
+    print('fish')
 
 def op_command(update: Update, context: CallbackContext) -> None:
     loggingMessage = 'requested to grant OP privs to ' + '\n'.join(str(user) for user in update.message.text.split(' ')[2:])
@@ -461,6 +499,37 @@ def echo(update: Update, context: CallbackContext) -> None:
     """Echo the user message."""
     update.message.reply_text(update.message.text)
 
+def anyCommand_command(update: Update, context: CallbackContext) -> None:
+    loggingMessage = 'requested to run any command in Minecraft'
+    if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
+        botArgs = []
+        mcCommand = update.message.text.split(' ')[2]
+        botArgs.append(mcCommand)
+        botArgs.append(update.message.text.split(' ')[1])
+        botArgs.append(' '.join(update.message.text.split(' ')[3:]))
+        botArgs = ' '.join(botArgs)
+        print(botArgs)
+        sendMinecraftCommand(update, mcCommand, botArgs)
+
+def mapReg_command(update: Update, context: CallbackContext) -> None:
+    loggingMessage = 'requested to run any command in Minecraft'
+    if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
+        mcCommand = 'dynmap'
+        botArgs = []
+        botArgs.append(mcCommand)
+        botArgs.append(update.message.text.split(' ')[1])
+        botArgs.append('webregister')
+        botArgs.append(' '.join(update.message.text.split(' ')[2:]))
+        botArgs = ' '.join(botArgs)
+        print(botArgs)
+        mcStdout = sendMinecraftCommand(update, mcCommand, botArgs)
+        print(mcStdout)
+        regCodes = []
+        for line in mcStdout:
+            if 'Registration code' in line:
+                regCodes.append(line)
+        update.message.reply_text(str(regCodes[-1:]))
+
 def badCMD(update: Update, context: CallbackContext) -> None:
     update.message.reply_text('Invalid command')
 
@@ -469,6 +538,10 @@ def main():
     loadConfig()
 
     # Start the file watch service
+    fileEventHandler = RegexMatchingEventHandler(regexMatch, ignore_patterns, ignoreDirectories, caseSensitive)
+    fileEventHandler.on_modified = watchFile.on_modified
+    my_observer = Observer()
+    my_observer.schedule(fileEventHandler, path, recursive=goRecursively)
     my_observer.start()
 
     """Start the bot."""
@@ -495,7 +568,10 @@ def main():
     dispatcher.add_handler(CommandHandler("broadcast", broadcast_command))
     dispatcher.add_handler(CommandHandler("test", test_command))
     dispatcher.add_handler(CommandHandler("players", players_command))
+    dispatcher.add_handler(CommandHandler("status", status_command))
     dispatcher.add_handler(CommandHandler("propGet", propGet_command))
+    dispatcher.add_handler(CommandHandler("cmd", anyCommand_command))
+    dispatcher.add_handler(CommandHandler("mapreg", mapReg_command))
 #    dispatcher.add_handler(CommandHandler("kb", kb))
     updater.dispatcher.add_handler(CallbackQueryHandler(button))
 
