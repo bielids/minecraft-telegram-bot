@@ -15,12 +15,14 @@ import re
 import string
 import random
 import crypt
+import pandas as pd
+from mcBotDB import *
 from collections import deque
 from mcstatus import MinecraftServer
 from threading import Thread
 from watchdog.events import RegexMatchingEventHandler
 from watchdog.observers import Observer
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler
 
@@ -37,7 +39,6 @@ path = os.path.dirname(os.path.realpath(__file__))
 logDir = "logs"
 logName = "debug.log"
 debug = True
-unixUsers = {}
 
 # styling codes
 class colour:
@@ -63,7 +64,7 @@ logging.basicConfig(
     handlers=[
         logging.FileHandler(path + '/' + logDir + '/' + logName),
         logging.StreamHandler(),
-        logging.handlers.TimedRotatingFileHandler(logName, when="midnight", interval=1)
+        logging.handlers.TimedRotatingFileHandler(path + '/' + logDir + '/' + logName, when="midnight", interval=1)
     ]
 )
 
@@ -162,7 +163,7 @@ class watchFile:
 
 # event handler settings
 regexMatch = [".+yml"]
-ignore_patterns = [".+bak|.+badValues|.+swp"]
+ignore_patterns = [".+bak|.+badValues|.+swp|userList.yml"] #sure that works
 goRecursively = False
 
 
@@ -221,13 +222,14 @@ def mcServerSelection(update):
         except:
             print('well poop')
 
+# uses mcstatus to query localhost server after finding listening port
 def mcServerQuery(update):
     global mcPort
     global mcQueryResult
     global mcServerSelected
     global mcServer
     print(mcServer)
-    try:
+    try: # just gotta find the port number to the server provided
         with open('/home/minecraft/' + mcServer + '/server.properties') as conf:
             for line in conf.readlines():
                 if 'server-port' in line:
@@ -251,6 +253,7 @@ def sendCreateUser(update):
 def sshUserGen():
     global genUnixUsername
     global genUnixPassword
+    logging.info('Generating new credentials....')
     genUnixUsername = ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(10))
     genUnixPassword = ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(10))
 
@@ -264,31 +267,51 @@ def createUnixUser(unixUsername, unixPassword):
     result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
 
 # schedule user deactivation
-def schedDelUnixUser(ttl):
-    s.enter(ttl, 1, delUnixUser)
+def schedDelUnixUser(unixUser, ttl):
+    logging.info('Scheduled deletion of ' + unixUser)
+    s.enter(ttl, 1, delUnixUser, (unixUser,))
     s.run()
 
 # actually deactivate the user
-def delUnixUser():
-    global genUnixUsername
-    bashCommand = "sudo pkill -u " + genUnixUsername
+def delUnixUser(unixUser):
+    dbCon = sql_connection()
+    bashCommand = "sudo pkill -u " + unixUser
     result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
-    bashCommand = "sudo usermod --lock --shell /bin/nologin " + genUnixUsername
+    bashCommand = "sudo usermod --lock --shell /bin/nologin " + unixUser
     result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
-    logging.warning('user deleted!')
-    SecureString.clearmem(genUnixUsername)
+    logging.warning(unixUser + ' has been deactivated.')
+    sql_setUnixUserInactive(dbCon, unixUser)
 
+# will eventually be a function to extend the lifetime of an account
 def extendUserLifetime(ttl):
     pass
 
-def matchUnixWithMC(mcUser, unixUser):
-    global unixUsers
-    if mcUser in unixUsers:
-        unixUsers[mcUser].append(unixUser)
+# Associate unix users to Telegram users
+def matchUnixWithMC(tgUser, unixTTL):
+    global genUnixUsername
+    # new unixUsers DB initialisation
+    dbCon = sql_connection()
+    if sql_getActiveUnix(dbCon, tgUser):
+        logging.warning('Active UNIX accounts found for ' + tgUser + ' in db. Not creating a new user...')
+        return False
     else:
-        unixUsers[mcUser] = []
-        unixUsers[mcUser].append(unixUser)
-    print(unixUsers)
+        logging.info('No active UNIX accounts found for ' + tgUser + '. Proceeding with account creation...')
+        sshUserGen()
+        entities = (tgUser, genUnixUsername, int(datetime.timestamp(datetime.now())) + unixTTL, 1)
+        createUnixUser(genUnixUsername, genUnixPassword)
+        sql_insertUnixUser(dbCon, entities)
+        return True
+
+# check DB for active users and schedule deletion of users about to expire
+# and delete users that have expired
+def cleanupZombieUsers():
+    dbCon = sql_connection()
+    for user in sql_getAllActive(dbCon):
+        if int(user[3]) < int(datetime.timestamp(datetime.now())):
+            delUnixUser(user[2])
+        else:
+            schedDeletion = Thread(target=schedDelUnixUser, args=(user[2], int(user[3]) - int(datetime.timestamp(datetime.now())),))
+            schedDeletion.start()
 
 ##################################################################################
 #                         Graphical interface building                           #
@@ -350,7 +373,7 @@ def start(update: Update, context: CallbackContext) -> None:
 def restart_command(update: Update, context: CallbackContext) -> None:
     loggingMessage = 'requested to restart the server'
     if functionLogging(update, loggingMessage) and checkPerm(update, sys._getframe().f_code.co_name.split('_')[0]):
-        bashCommand = "sudo systemctl restart minecraft@JarlsWorld"
+        bashCommand = "sudo systemctl restart minecraft@JarlsServer"
         result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
         update.message.reply_text('Minecraft server rebooted')
 
@@ -396,20 +419,20 @@ def perm_command(update: Update, context: CallbackContext) -> None:
 def genSSH_command(update: Update, context: CallbackContext) -> None:
     global genUnixUsername
     global genUnixPassword
-    sshUserGen()
-    createUnixUser(genUnixUsername, genUnixPassword)
-    logging.warning('Created new SSH login for ' + update.message.from_user.username + "!")
-    logging.warning('Username: ' + genUnixUsername)
-    matchUnixWithMC(update.message.from_user.username, genUnixUsername)
-    update.message.reply_text('New SSH login successfully created!\n\nServer: mc.atetreault.xyz\nPort: 10069')
-    update.message.reply_text('Username: ' + genUnixUsername + '\nPassword: ' + genUnixPassword)
-    update.message.reply_text('This user will be deactivated in 2 hours!')
-    SecureString.clearmem(genUnixPassword)
-    schedDeletion = Thread(target=schedDelUnixUser, args=(7200,))
-    schedDeletion.start()
+    unixTTL=7200
+    if matchUnixWithMC(update.message.from_user.username, unixTTL):
+        logging.warning('Created new SSH login for ' + update.message.from_user.username + "!")
+        update.message.reply_text('New SSH login successfully created!\n\nServer: mc.atetreault.xyz\nPort: 10069')
+        update.message.reply_text('Username: ' + genUnixUsername + '\nPassword: ' + genUnixPassword)
+        SecureString.clearmem(genUnixPassword)
+        update.message.reply_text('This user will be deactivated in 2 hours!')
+        schedDeletion = Thread(target=schedDelUnixUser, args=(genUnixUsername, unixTTL,))
+        schedDeletion.start()
+    else:
+        update.message.reply_text('Sorry, you already have active Unix accounts associated to your user. Please contact your systems administrator if you think this is an error.')
 
 def printFish():
-    print('fish')
+    print('<><')
 
 def op_command(update: Update, context: CallbackContext) -> None:
     loggingMessage = 'requested to grant OP privs to ' + '\n'.join(str(user) for user in update.message.text.split(' ')[2:])
@@ -528,7 +551,8 @@ def mapReg_command(update: Update, context: CallbackContext) -> None:
         for line in mcStdout:
             if 'Registration code' in line:
                 regCodes.append(line)
-        update.message.reply_text(str(regCodes[-1:]))
+        print(regCodes)
+        update.message.reply_text(regCodes[-1])
 
 def badCMD(update: Update, context: CallbackContext) -> None:
     update.message.reply_text('Invalid command')
@@ -536,6 +560,9 @@ def badCMD(update: Update, context: CallbackContext) -> None:
 def main():
     # load config and values
     loadConfig()
+
+    # clean up any unix accoutn that was not removed
+    cleanupZombieUsers()
 
     # Start the file watch service
     fileEventHandler = RegexMatchingEventHandler(regexMatch, ignore_patterns, ignoreDirectories, caseSensitive)
@@ -586,7 +613,6 @@ def main():
     # SIGTERM or SIGABRT. This should be used most of the time, since
     # start_polling() is non-blocking and will stop the bot gracefully.
     updater.idle()
-
 
 if __name__ == '__main__':
     main()
