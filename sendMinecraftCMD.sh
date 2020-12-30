@@ -2,6 +2,7 @@
 
 sendMinecraftCommand() {
     /usr/bin/screen -r mc-${mcServer} -p0 -X stuff "${mcCmd} ${mcArgs}\n"
+    sleep 1
     /usr/bin/screen -S mc-${mcServer} -X hardcopy /home/minecraft/${mcServer}/mcOut.log
 }
 

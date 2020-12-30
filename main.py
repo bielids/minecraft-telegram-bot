@@ -39,6 +39,7 @@ path = os.path.dirname(os.path.realpath(__file__))
 logDir = "logs"
 logName = "debug.log"
 debug = True
+unixTTL = 28800
 
 # styling codes
 class colour:
@@ -326,7 +327,7 @@ def sendMinecraftCommand(update, mcCmd, botArgs):
     result = subprocess.run(bashCommand.split(), stdout=subprocess.PIPE)
     update.message.reply_text(result.stdout.decode("utf-8"))
     with open("/home/minecraft/" + mcServer + "/mcOut.log") as mcOut:
-        time.sleep(0.5)
+        time.sleep(1.5)
         mcStdout = deque(mcOut, 25)
     return mcStdout
 
@@ -419,7 +420,7 @@ def perm_command(update: Update, context: CallbackContext) -> None:
 def genSSH_command(update: Update, context: CallbackContext) -> None:
     global genUnixUsername
     global genUnixPassword
-    unixTTL=7200
+    global unixTTL
     if matchUnixWithMC(update.message.from_user.username, unixTTL):
         logging.warning('Created new SSH login for ' + update.message.from_user.username + "!")
         update.message.reply_text('New SSH login successfully created!\n\nServer: mc.atetreault.xyz\nPort: 10069')
